@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -38,14 +39,44 @@ namespace devart_efcore_value_conversion_bug_repro
                     {
                         context.Database.EnsureDeleted();
                         context.Database.ExecuteSqlCommand(@"
-CREATE TABLE RIDER
+CREATE TABLE CLASSROOM
 (
     ID          NUMBER (19, 0) GENERATED ALWAYS AS IDENTITY NOT NULL,
-    MOUNT       VARCHAR2 (100 CHAR)
+    NAME        VARCHAR2(50 CHAR)
 )");
 
-                        var rider = new Rider(EquineBeast.Mule);
-                        context.Add(rider);
+                        context.Database.ExecuteSqlCommand(@"
+CREATE TABLE PUZZLE_GROUP
+(
+    ID            NUMBER (19, 0) GENERATED ALWAYS AS IDENTITY NOT NULL,
+    NAME        VARCHAR2(50 CHAR),
+    CLASSROOM_ID  NUMBER (19, 0) NOT NULL
+)");
+
+                        context.Database.ExecuteSqlCommand(@"
+CREATE TABLE PUZZLE
+(
+    ID              NUMBER (19, 0) GENERATED ALWAYS AS IDENTITY NOT NULL,
+    PUZZLE_GROUP_ID NUMBER (19, 0) NOT NULL,
+    COMPLETED       NUMBER (1, 0) NOT NULL
+)");
+
+                        var classroom = new Classroom("test");
+                        var puzzleGroup1 = new PuzzleGroup(classroom, "group1");
+                        var puzzleGroup2 = new PuzzleGroup(classroom, "group2");
+
+                        var puzzle1 = new Puzzle(puzzleGroup1, true);
+                        var puzzle2 = new Puzzle(puzzleGroup1, true);
+                        var puzzle3 = new Puzzle(puzzleGroup2, true);
+                        var puzzle4 = new Puzzle(puzzleGroup2, false);
+
+                        context.Add(classroom);
+                        context.Add(puzzleGroup1);
+                        context.Add(puzzleGroup2);
+                        context.Add(puzzle1);
+                        context.Add(puzzle2);
+                        context.Add(puzzle3);
+                        context.Add(puzzle4);
                         await context.SaveChangesAsync();
                     }
 
@@ -55,18 +86,14 @@ CREATE TABLE RIDER
                 using (var context = new EntityContext())
                 {
                     // This works
-                    var unicornRider = context.Set<Rider>()
-                        .FirstOrDefault(_ => _.Mount.Value == EquineBeast.Unicorn);
+                    var classroomResult1 = context
+                        .Set<Classroom>()
+                        .FirstOrDefault(_ => _.PuzzleGroups.Any(gr => gr.Puzzles.Any(p => p.Completed)));
 
-                    // This works
-                    var beastsWithHorns = new EquineBeast?[] { EquineBeast.Unicorn };
-                    var hornRider = context.Set<Rider>()
-                        .FirstOrDefault(_ => beastsWithHorns.Contains(_.Mount));
-
-                    // This doesn't - throws ORA-01722: invalid number exception
-                    var beastsWithoutHorns = new[] { EquineBeast.Donkey, EquineBeast.Horse, EquineBeast.Mule };
-                    var noHornRider = context.Set<Rider>()
-                        .FirstOrDefault(_ => beastsWithoutHorns.Contains(_.Mount.Value));
+                    // This doesn't - throws ORA-00936: missing expression
+                    var classroomResult2 = context
+                        .Set<Classroom>()
+                        .FirstOrDefault(_ => _.PuzzleGroups.All(gr => gr.Puzzles.All(p => p.Completed)));
                 }
 
                 Console.WriteLine("Finished.");
@@ -105,35 +132,76 @@ CREATE TABLE RIDER
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            modelBuilder.Entity<Rider>().ToTable("RIDER");
-            modelBuilder.Entity<Rider>().HasKey(_ => _.Id);
-            modelBuilder.Entity<Rider>().Property(_ => _.Id).HasColumnName("ID");
-            modelBuilder.Entity<Rider>().Property(_ => _.Mount).HasConversion<string>();
-            modelBuilder.Entity<Rider>().Property(_ => _.Mount).HasColumnName("MOUNT");
+            modelBuilder.Entity<Classroom>().ToTable("CLASSROOM");
+            modelBuilder.Entity<Classroom>().HasKey(_ => _.Id);
+            modelBuilder.Entity<Classroom>().Property(_ => _.Id).HasColumnName("ID");
+            modelBuilder.Entity<Classroom>().Property(_ => _.Name).HasColumnName("NAME");
+            modelBuilder.Entity<Classroom>().HasMany(_ => _.PuzzleGroups).WithOne(_ => _.Classroom).HasForeignKey("CLASSROOM_ID");
+
+            modelBuilder.Entity<PuzzleGroup>().ToTable("PUZZLE_GROUP");
+            modelBuilder.Entity<PuzzleGroup>().HasKey(_ => _.Id);
+            modelBuilder.Entity<PuzzleGroup>().Property(_ => _.Id).HasColumnName("ID");
+            modelBuilder.Entity<PuzzleGroup>().Property(_ => _.Name).HasColumnName("NAME");
+            modelBuilder.Entity<PuzzleGroup>().HasMany(_ => _.Puzzles).WithOne(_ => _.PuzzleGroup).HasForeignKey("PUZZLE_GROUP_ID");
+
+            modelBuilder.Entity<Puzzle>().ToTable("PUZZLE");
+            modelBuilder.Entity<Puzzle>().HasKey(_ => _.Id);
+            modelBuilder.Entity<Puzzle>().Property(_ => _.Id).HasColumnName("ID");
+            modelBuilder.Entity<Puzzle>().Property(_ => _.Completed).HasColumnName("COMPLETED");
         }
     }
 
-    public class Rider
+    public class Classroom
     {
-        public int Id { get; private set; }
-        public EquineBeast? Mount { get; private set; }
+        public long Id { get; private set; }
+        public string Name { get; private set; }
+        public List<PuzzleGroup> PuzzleGroups { get; private set; }
 
-        private Rider()
+        private Classroom()
         {
             // Required by EF Core
         }
 
-        public Rider(EquineBeast? mount)
+        public Classroom(string name)
         {
-            Mount = mount;
+            Name = name;
         }
     }
 
-    public enum EquineBeast
+    public class PuzzleGroup
     {
-        Donkey,
-        Mule,
-        Horse,
-        Unicorn
+        public long Id { get; private set; }
+        public string Name { get; private set; }
+        public List<Puzzle> Puzzles { get; private set; }
+        public Classroom Classroom { get; private set; }
+
+        private PuzzleGroup()
+        {
+            // Required by EF Core
+        }
+
+        public PuzzleGroup(Classroom classroom, string name)
+        {
+            Classroom = classroom;
+            Name = name;
+        }
+    }
+
+    public class Puzzle
+    {
+        public long Id { get; private set; }
+        public bool Completed { get; private set; }
+        public PuzzleGroup PuzzleGroup { get; private set; }
+
+        private Puzzle()
+        {
+            // Required by EF Core
+        }
+
+        public Puzzle(PuzzleGroup puzzleGroup, bool completed)
+        {
+            PuzzleGroup = puzzleGroup;
+            Completed = completed;
+        }
     }
 }
